@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resim Duzenleme Uygulamasi</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding-top: 20px;
+            background-color: #f8f9fa;
+        }
+        .container {
+            max-width: 800px;
+        }
+        .logo {
+            max-width: 150px;
+            margin-bottom: 20px;
+        }
+        .card {
+            border-radius: 15px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            overflow: hidden;
+            transition: transform 0.3s;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+        }
+        .card-img-top {
+            height: 200px;
+            object-fit: cover;
+        }
+        .btn-primary {
+            background-color: #0d6efd;
+            border: none;
+            border-radius: 30px;
+            padding: 10px 25px;
+        }
+        .jumbotron {
+            background-color: #e9ecef;
+            padding: 2rem;
+            border-radius: 15px;
+            margin-bottom: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container text-center">
+        <h1 class="mb-4">ZITS Resim Düzenleme Uygulaması</h1>
+        <p class="lead mb-4">
+            Bu uygulama, ZITS (Zero-Shot Image-to-Image Translation) modelini kullanarak fotoğraflardan
+            istenmeyen öğeleri kaldırmanıza yardımcı olur.
+        </p>
+        
+        <div class="jumbotron">
+            <h2>Nasıl Çalışır?</h2>
+            <ol class="text-start">
+                <li>Düzenlemek istediğiniz bir görüntü yükleyin</li>
+                <li>Silmek istediğiniz alanı çizim aracıyla işaretleyin</li>
+                <li>"İşle" düğmesine tıklayın ve ZITS modeli işaretli alanı çevresindeki içerikle uyumlu şekilde dolduracaktır</li>
+            </ol>
+            <a href="{{ url_for('editor') }}" class="btn btn-primary btn-lg mt-3">Editöre Git</a>
+        </div>
+        
+        <div class="row">
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Kolay Kullanım</h5>
+                        <p class="card-text">Kullanıcı dostu arayüz sayesinde, herkes kolayca görüntü düzenleyebilir.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Yapay Zeka Destekli</h5>
+                        <p class="card-text">ZITS AI modeli, fotoğraflardaki nesneleri gerçekçi bir şekilde kaldırır.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Hızlı İşlem</h5>
+                        <p class="card-text">GPU hızlandırması sayesinde işlemler kısa sürede tamamlanır.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <footer class="text-center mt-5 mb-3">
+        <p class="text-muted">&copy; 2023 ZITS Resim Düzenleme Uygulaması</p>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

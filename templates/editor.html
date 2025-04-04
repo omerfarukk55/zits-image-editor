@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Resim Düzenleyici</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
+    />
+    <style>
+      body {
+        padding: 20px;
+        background-color: #f8f9fa;
+      }
+      .canvas-container {
+        position: relative;
+        margin: 0 auto;
+        max-width: 800px; /* Sabit bir genişlik */
+        border: 1px solid #ddd;
+        background-color: #fff;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        border-radius: 5px;
+    }
+    
+    #imageCanvas, #drawCanvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        cursor: crosshair;
+    }
+    
+    #drawCanvas {
+        z-index: 2;
+        background-color: transparent;}
+        
+      .toolbar {
+        background-color: #f8f9fa;
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 15px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        border: 1px solid #ddd;
+      }
+      .toolbar button {
+        margin-right: 10px;
+        margin-bottom: 5px;
+      }
+      .result-container {
+        margin-top: 20px;
+        display: none;
+      }
+      .result-image {
+        max-width: 100%;
+        border-radius: 5px;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+      }
+      .brush-size {
+        width: 100px;
+      }
+      #loading {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(255, 255, 255, 0.8);
+        z-index: 1000;
+        text-align: center;
+        padding-top: 20%;
+      }
+      .spinner-border {
+        width: 3rem;
+        height: 3rem;
+      }
+      .file-upload {
+        border: 2px dashed #0d6efd;
+        padding: 20px;
+        border-radius: 5px;
+        text-align: center;
+        margin-bottom: 20px;
+        background-color: #f8f9fa;
+      }
+      .file-upload:hover {
+        background-color: #e9ecef;
+      }
+      .btn-icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .btn-icon i {
+        margin-right: 5px;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Yükleniyor Göstergesi -->
+    <div id="loading">
+      <div class="spinner-border text-primary" role="status">
+        <span class="visually-hidden">Yükleniyor...</span>
+      </div>
+      <p class="mt-3">ZITS modeli çalışıyor, lütfen bekleyiniz...</p>
+    </div>
+    <div class="container">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1>Resim Düzenleyici</h1>
+        <a
+          href="{{ url_for('index') }}"
+          class="btn btn-outline-secondary btn-icon"
+        >
+          <i class="fas fa-home"></i> Ana Sayfa
+        </a>
+      </div>
+
+      <!-- Dosya Yükleme Alanı -->
+      <div class="file-upload" id="upload-area">
+        <h4>Fotoğraf Yükleyin</h4>
+        <p>PNG, JPG veya JPEG formatında dosya seçin</p>
+        <input type="file" id="fileInput" class="form-control mb-3" accept=".png, .jpg, .jpeg">
+        <button class="btn btn-primary btn-icon" id="uploadBtn">
+            <i class="fas fa-upload"></i> Yükle
+        </button>
+        <!-- Yüklenen resmi göstermek için div -->
+        <div id="image-preview" style="margin-top: 20px; display: none;">
+            <img id="uploaded-image" style="max-width: 100%;" alt="Yüklenen Resim">
+        </div>
+    </div>
+
+      <!-- Canvas Alanı (başlangıçta gizli) -->
+      <div id="canvas-container" class="canvas-container" style="display: none">
+        <canvas id="imageCanvas"></canvas>
+        <canvas id="drawCanvas"></canvas>
+      </div>
+
+      <!-- Araç Çubuğu (başlangıçta gizli) -->
+      <div class="toolbar" style="display: none">
+        <button id="brushBtn" class="btn btn-outline-primary btn-icon active">
+          <i class="fas fa-paint-brush"></i> Fırça
+        </button>
+       
+        <button id="clearBtn" class="btn btn-outline-danger btn-icon">
+          <i class="fas fa-trash"></i> Temizle
+        </button>
+        <div class="ms-3 d-flex align-items-center">
+          <label for="brushSize" class="me-2">Fırça Boyutu:</label>
+          <input
+            type="range"
+            id="brushSize"
+            class="form-range brush-size"
+            min="1"
+            max="50"
+            value="10"
+          />
+          <span id="brushSizeValue" class="ms-2">10px</span>
+        </div>
+        <button id="processBtn" class="btn btn-success btn-icon ms-auto">
+          <i class="fas fa-magic"></i> İşle
+        </button>
+      </div>
+
+      <!-- Sonuç Konteyneri -->
+      <div id="resultContainer" class="result-container">
+        <div class="alert alert-success">
+          <i class="fas fa-check-circle"></i>
+          İşlem başarıyla tamamlandı!
+        </div>
+        <div class="d-flex justify-content-center mb-3">
+          <img id="resultImage" class="result-image" alt="İşlenmiş Görüntü" />
+        </div>
+        <div class="d-flex justify-content-center">
+          <a id="downloadBtn" class="btn btn-primary me-2 btn-icon" download>
+            <i class="fas fa-download"></i> İndir
+          </a>
+          <button id="newEditBtn" class="btn btn-secondary btn-icon">
+            <i class="fas fa-redo"></i> Yeni Düzenleme
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+      $(document).ready(function () {
+        // Canvas ve kontekstleri
+        const imageCanvas = document.getElementById("imageCanvas");
+        const drawCanvas = document.getElementById("drawCanvas");
+        const imgCtx = imageCanvas.getContext("2d");
+        const drawCtx = drawCanvas.getContext("2d");
+
+        // Değişkenler
+        let isDrawing = false;
+        let lastX = 0;
+        let lastY = 0;
+        let brushSize = 10;
+        let mode = "brush";
+        let filename = null;
+
+        // Fırça boyutu kontrolü
+        $("#brushSize").on("input", function () {
+          brushSize = $(this).val();
+          $("#brushSizeValue").text(brushSize + "px");
+        });
+
+        // Fırça/Silgi düğmeleri
+        $("#brushBtn").click(function () {
+          mode = "brush";
+          $(this).addClass("active");
+         
+        });
+
+        
+
+        // Canvas'ı temizle
+        $("#clearBtn").click(function () {
+          drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+        });
+
+        // Yeni düzenleme düğmesi
+        $("#newEditBtn").click(function () {
+          $("#resultContainer").hide();
+          $("#canvas-container").show();
+          $(".toolbar").show();
+        });
+
+       // Dosya yükleme
+       $('#uploadBtn').click(function() {
+        const fileInput = document.getElementById('fileInput');
+        if (fileInput.files.length === 0) {
+            alert('Lütfen bir görüntü dosyası seçin.');
+            return;
+        }
+        
+        const file = fileInput.files[0];
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        $('#loading').show();
+        
+        $.ajax({
+            url: "/upload",
+            type: 'POST',
+            data: formData,
+            processData: false,
+            contentType: false,
+            success: function(response) {
+                $('#loading').hide();
+                
+                if (response.success) {
+                    filename = response.filename; // filename değişkenini kaydet
+                    
+                    const img = new Image();
+                    img.onload = function() {
+                        // Canvas boyutlarını resmin gerçek boyutlarına göre ayarla
+                        const maxWidth = 800; // maksimum genişlik
+                        let width = img.width;
+                        let height = img.height;
+                        
+                        if (width > maxWidth) {
+                            const ratio = maxWidth / width;
+                            width = maxWidth;
+                            height = height * ratio;
+                        }
+                        
+                        // Canvas boyutlarını ayarla
+                        imageCanvas.width = width;
+                        imageCanvas.height = height;
+                        drawCanvas.width = width;
+                        drawCanvas.height = height;
+                        
+                        // Canvas container'ın yüksekliğini ayarla
+                        $('#canvas-container').css({
+                            'width': width + 'px',
+                            'height': height + 'px'
+                        });
+                        
+                        // Resmi canvas'a çiz
+                        imgCtx.drawImage(img, 0, 0, width, height);
+                        
+                        // Canvas ve araç çubuğunu göster
+                        $('#upload-area').hide();
+                        $('#canvas-container').show();
+                        $('.toolbar').show();
+                        
+                        // Canvas olaylarını yeniden başlat
+                        initializeCanvasEvents();
+                    };
+                    img.src = response.file_url;
+                } else {
+                    alert('Hata: ' + response.error);
+                }
+            },
+            error: function(xhr, status, error) {
+                $('#loading').hide();
+                console.error('Ajax Hatası:', xhr);
+                alert('Dosya yüklenirken bir hata oluştu: ' + error);
+            }
+        });
+    });
+    function initializeCanvasEvents() {
+        const drawCanvas = document.getElementById('drawCanvas');
+        const drawCtx = drawCanvas.getContext('2d');
+        
+        drawCtx.imageSmoothingEnabled = true;
+        drawCtx.imageSmoothingQuality = 'high';
+        
+        let isDrawing = false;
+        let lastX = 0;
+        let lastY = 0;
+        
+        function startDrawing(e) {
+            isDrawing = true;
+            const rect = drawCanvas.getBoundingClientRect();
+            [lastX, lastY] = [
+                e.clientX - rect.left,
+                e.clientY - rect.top
+            ];
+        }
+        function draw(e) {
+            if (!isDrawing) return;
+            
+            const rect = drawCanvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            drawCtx.beginPath();
+            drawCtx.moveTo(lastX, lastY);
+            drawCtx.lineTo(x, y);
+            drawCtx.strokeStyle = mode === 'brush' ? 'rgba(255, 255, 255, 1)' : 'rgba(0, 0, 0, 0)';
+            drawCtx.lineWidth = brushSize;
+            drawCtx.lineCap = 'round';
+            drawCtx.lineJoin = 'round';
+            drawCtx.stroke();
+            
+            [lastX, lastY] = [x, y];
+        }
+        function stopDrawing() {
+            isDrawing = false;
+        }
+        
+        drawCanvas.addEventListener('mousedown', startDrawing);
+        drawCanvas.addEventListener('mousemove', draw);
+        drawCanvas.addEventListener('mouseup', stopDrawing);
+        drawCanvas.addEventListener('mouseout', stopDrawing);
+    }
+    // İndirme işlemi için yeni fonksiyon
+function downloadImage(url, filename) {
+    fetch(url)
+        .then(response => response.blob())
+        .then(blob => {
+            const link = document.createElement('a');
+            link.href = window.URL.createObjectURL(blob);
+            link.download = filename || 'processed_image.png';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        })
+        .catch(error => {
+            console.error('İndirme hatası:', error);
+            alert('İndirme işlemi sırasında bir hata oluştu.');
+        });
+}
+$("#downloadBtn").click(function(e) {
+    e.preventDefault();
+    const imageUrl = $("#resultImage").attr('src');
+    const filename = imageUrl.split('/').pop();
+    downloadImage(imageUrl, filename);
+});
+        // İşle düğmesi
+        // İşle düğmesi
+$("#processBtn").click(function () {
+    $("#loading").show();
+
+    // Maske görüntüsünü oluştur
+    const maskCanvas = document.createElement("canvas");
+    maskCanvas.width = drawCanvas.width;
+    maskCanvas.height = drawCanvas.height;
+    const maskCtx = maskCanvas.getContext("2d");
+
+    // Önce tamamen şeffaf yap
+    maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+
+    // Çizilen alanları beyaz yap
+    maskCtx.fillStyle = 'black';  // Arka plan siyah
+    maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+    
+    // Çizilen alanları beyaza çevir
+    maskCtx.globalCompositeOperation = 'source-over';
+    const drawData = drawCanvas.getContext('2d').getImageData(0, 0, drawCanvas.width, drawCanvas.height);
+    const drawPixels = drawData.data;
+    
+    // Yeni bir ImageData oluştur
+    const maskData = maskCtx.createImageData(maskCanvas.width, maskCanvas.height);
+    const maskPixels = maskData.data;
+    
+    // Pikselleri işle
+    for (let i = 0; i < drawPixels.length; i += 4) {
+        // Eğer kırmızı piksel varsa (çizim yapılan yer)
+        if (drawPixels[i] > 0) {
+            maskPixels[i] = 255;     // R
+            maskPixels[i + 1] = 255; // G
+            maskPixels[i + 2] = 255; // B
+            maskPixels[i + 3] = 255; // A (tamamen opak)
+        } else {
+            maskPixels[i] = 0;       // R
+            maskPixels[i + 1] = 0;   // G
+            maskPixels[i + 2] = 0;   // B
+            maskPixels[i + 3] = 255; // A (tamamen opak)
+        }
+    }
+
+    // İşlenmiş maskeyi canvas'a yerleştir
+    maskCtx.putImageData(maskData, 0, 0);
+
+    // Maskeyi sunucuya gönder
+    const maskDataURL = maskCanvas.toDataURL("image/png");
+
+    $.ajax({
+        url: "{{ url_for('process_image') }}",
+        type: "POST",
+        data: {
+            filename: filename,
+            mask: maskDataURL,
+        },
+        success: function (response) {
+            $("#loading").hide();
+            if (response.success) {
+                $("#resultImage").attr("src", response.processed_image);
+                $("#resultContainer").show();
+                $("#canvas-container").hide();
+                $(".toolbar").hide();
+            } else {
+                alert("Hata: " + response.error);
+            }
+        },
+        error: function (xhr, status, error) {
+            $("#loading").hide();
+            console.error("Ajax Hatası:", xhr);
+            alert("İşlem sırasında bir hata oluştu: " + error);
+        },
+    });
+});
+      });
+    </script>
+  </body>
+</html>
