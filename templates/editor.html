@@ -164,6 +164,9 @@
         <button id="processBtn" class="btn btn-success btn-icon ms-auto">
           <i class="fas fa-magic"></i> İşle
         </button>
+        <button id="removeBgBtn" class="btn btn-info btn-icon ms-2">
+          <i class="fas fa-cut"></i> Arka Planı Kaldır
+        </button>
       </div>
 
       <!-- Sonuç Konteyneri -->
@@ -448,6 +451,40 @@ $("#processBtn").click(function () {
         },
     });
 });
+
+        // Arka plan kaldırma düğmesi
+        $("#removeBgBtn").click(function () {
+          if (!filename) {
+            alert("Lütfen önce bir görüntü yükleyin.");
+            return;
+          }
+
+          $("#loading").show();
+          $("#loading p").text("Arka plan kaldırılıyor, lütfen bekleyiniz...");
+
+          $.ajax({
+            url: "/remove_background",
+            type: "POST",
+            data: { filename: filename },
+            success: function (response) {
+              if (response.success) {
+                $("#resultImage").attr("src", response.processed_image);
+                $("#downloadBtn").attr("href", response.processed_image);
+                $("#resultContainer").show();
+                $("#canvas-container").hide();
+                $(".toolbar").hide();
+              } else {
+                alert("Hata: " + response.error);
+              }
+            },
+            error: function () {
+              alert("Bir hata oluştu. Lütfen tekrar deneyin.");
+            },
+            complete: function () {
+              $("#loading").hide();
+            },
+          });
+        });
       });
     </script>
   </body>
