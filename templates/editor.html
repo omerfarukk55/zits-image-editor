@@ -1,20 +1,9 @@
-<!DOCTYPE html>
-<html lang="tr">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Resim Düzenleyici</title>
-    <link
-      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css"
-      rel="stylesheet"
-    />
-    <link
-      rel="stylesheet"
-      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
-    />
+{% extends "base.html" %}
+{% block title %}{% endblock %}
+{% block content %}
     <style>
       body {
-        padding: 20px;
+        
         background-color: #f8f9fa;
       }
       .canvas-container {
@@ -100,8 +89,6 @@
         margin-right: 5px;
       }
     </style>
-  </head>
-  <body>
     <!-- Yükleniyor Göstergesi -->
     <div id="loading">
       <div class="spinner-border text-primary" role="status">
@@ -111,15 +98,8 @@
     </div>
     <div class="container">
       <div class="d-flex justify-content-between align-items-center mb-3">
-        <h1>Resim Düzenleyici</h1>
-        <a
-          href="{{ url_for('index') }}"
-          class="btn btn-outline-secondary btn-icon"
-        >
-          <i class="fas fa-home"></i> Ana Sayfa
-        </a>
+        <h1>Resim nesne silme</h1>
       </div>
-
       <!-- Dosya Yükleme Alanı -->
       <div class="file-upload" id="upload-area">
         <h4>Fotoğraf Yükleyin</h4>
@@ -487,5 +467,4 @@ $("#processBtn").click(function () {
         });
       });
     </script>
-  </body>
-</html>
+    {% endblock %}

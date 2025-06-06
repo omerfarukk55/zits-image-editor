@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{% endblock %} - Görsel Düzenleme</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  
+    <style>
+        body {
+            background-color: #f8f9fa;
+        }
+        .container {
+            max-width: 1200px;
+        }
+        #canvasWrap {
+            position: relative;
+            margin: 20px auto;
+            display: flex;
+            justify-content: center;
+        }
+        #mainCanvas, #drawCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        #drawCanvas {
+            z-index: 10;
+            cursor: crosshair;
+        }
+        .controls {
+            margin: 20px;
+            text-align: center;
+        }
+        .controls button, .controls input, .controls select {
+            margin: 5px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .controls button.active {
+            background-color: #007bff;
+            color: white;
+            border-color: #007bff;
+        }
+        #textInputWrap {
+            display: none;
+        }
+        #resultContainer {
+            margin-top: 20px;
+            text-align: center;
+            display: none;
+        }
+        #resultContainer img, #resultContainer video {
+            max-width: 100%;
+            max-height: 600px;
+            margin-top: 10px;
+        }
+        .video-controls {
+            display: none;
+        }
+
+        /* Loading spinner stilları */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            display: none; /* Varsayılan olarak gizli */
+        }
+
+        .spinner-border {
+            width: 3rem;
+            height: 3rem;
+        }
+
+        /* Kart stilleri (anasayfa için) */
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            transition: all 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+
+        .card-body {
+            padding: 20px;
+        }
+
+        .tool-icon {
+            font-size: 3rem; /* İkon boyutunu büyüt */
+            margin-bottom: 15px;
+            color: #0d6efd; /* İkon rengi */
+        }
+
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="{{ url_for('home') }}">Görsel Düzenleme</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('home') }}">Ana Sayfa</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('img_draw_editor') }}">Görsele Yazı ve Şekil Ekle</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('vid_draw_editor') }}">Videoya Yazı ve Şekil Ekle</a>
+                    </li>
+                     <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('remove_bg_page') }}">Arka Plan Kaldırma</a>
+                    </li>
+                     <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('editor') }}">Resim Düzenleyici (Fırça)</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    {% block content %}{% endblock %}
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    {% block scripts %}{% endblock %}
+
+    <!-- Loading Spinner -->
+    <div class="loading-overlay" id="loadingSpinner">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Yükleniyor...</span>
+        </div>
+    </div>
+
+</body>
+</html> 
