@@ -11,12 +11,20 @@ import numpy as np
 from io import BytesIO
 from models.zits_model import ZITSInpainter
 from models.background_remover import BackgroundRemover
+from moviepy.editor import VideoFileClip, ImageSequenceClip
+from models.raft.raft_wrapper import RAFTOpticalFlow
 import torch
-import torchvision.transforms as transforms
+import torchvision.transforms as transforms  # Bu satırı ekleyin
 from models.raft.raft import RAFT
 import argparse
 from datetime import datetime
 import time
+try:
+    from scipy import ndimage
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    print("Scipy mevcut değil, OpenCV blur kullanılacak")
 
 app = Flask(__name__, static_folder='static')
 app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
@@ -24,7 +32,7 @@ app.config['PROCESSED_FOLDER'] = os.path.join('static', 'processed')
 app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg'}
 app.config['ALLOWED_VIDEO_EXTENSIONS'] = {'mp4', 'avi', 'mov', 'mkv'}
 
-# Klasörleri oluştur
+# Upload klasörlerini oluştur
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['PROCESSED_FOLDER'], exist_ok=True)
 os.makedirs('temp', exist_ok=True)
@@ -50,40 +58,45 @@ except Exception as e:
 # Global değişkenler
 raft_model = None
 
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
-
-def allowed_video_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_VIDEO_EXTENSIONS']
-
 def load_raft_model():
-    """RAFT Optical Flow modelini yükle"""
     try:
         print("RAFT modeli yükleniyor...")
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"RAFT modeli için kullanılacak cihaz: {device}")
         
+        # RAFT model yapılandırması
         args_dict = {
             'model': 'raft-things.pth',
             'small': False,
             'mixed_precision': True,
+            'hidden_dims': [128]*3,
+            'context_dims': [128]*3,
+            'corr_implementation': 'reg',
             'corr_levels': 4,
             'corr_radius': 4,
+            'mask_pred': False,
             'dropout': 0.0,
-            'alternate_corr': False
+            'alternate_corr': False,
+            'mask_pred_hidden_dims': [128]*3,
+            'mask_pred_context_dims': [128]*3,
+            'mask_pred_corr_levels': 4,
+            'mask_pred_corr_radius': 4
         }
         
         args = argparse.Namespace(**args_dict)
-        model_path = os.path.join('models/raft', args.model)
         
+        # Model dosyasının varlığını kontrol et
+        model_path = os.path.join('models/raft', args.model)
         if not os.path.exists(model_path):
             print(f"HATA: Model dosyası bulunamadı: {model_path}")
             return None
             
+        print(f"Model dosyası bulundu: {model_path}")
+        
         model = RAFT(args)
         state_dict = torch.load(model_path, map_location=device)
         
-        # DataParallel prefix temizle
+        # DataParallel prefix'ini temizle
         if list(state_dict.keys())[0].startswith('module.'):
             new_state_dict = {}
             for key, value in state_dict.items():
@@ -100,6 +113,7 @@ def load_raft_model():
         
     except Exception as e:
         print(f"RAFT modeli yüklenirken hata: {str(e)}")
+        print("Hata detayı:", traceback.format_exc())
         return None
 
 # RAFT modelini başlat
@@ -108,6 +122,12 @@ try:
 except Exception as e:
     print(f"RAFT model başlatma hatası: {e}")
     raft_model = None
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
+
+def allowed_video_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_VIDEO_EXTENSIONS']
 
 def frame_to_tensor(frame, device):
     """OpenCV frame'i RAFT için tensor'e çevir"""
@@ -154,150 +174,192 @@ def tensor_to_flow(tensor):
         print(f"Tensor flow çevirme hatası: {e}")
         return None
 
-def extract_drawing_regions(mask):
-    """Çizim bölgelerini tespit et ve analiz et"""
+def apply_flow_to_mask(mask, flow):
+    """Optik akışı kullanarak maskeyi hareket ettirir."""
     try:
-        if len(mask.shape) == 3:
-            gray_mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
-        else:
-            gray_mask = mask
+        h, w = mask.shape[:2]
+        y, x = np.mgrid[0:h, 0:w].astype(np.float32)
         
-        # Binary threshold
-        _, binary = cv2.threshold(gray_mask, 10, 255, cv2.THRESH_BINARY)
+        flow_x = flow[..., 0]
+        flow_y = flow[..., 1]
+        new_x = x + flow_x
+        new_y = y + flow_y
         
-        # Morphological operations
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+        new_x = np.clip(new_x, 0, w-1)
+        new_y = np.clip(new_y, 0, h-1)
         
-        # Contourları bul
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        new_mask = cv2.remap(mask, new_x, new_y, cv2.INTER_LINEAR)
         
-        regions = []
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area > 50:  # Minimum alan
-                x, y, w, h = cv2.boundingRect(contour)
-                
-                # Padding ekle
-                padding = 10
-                x = max(0, x - padding)
-                y = max(0, y - padding)
-                w = min(mask.shape[1] - x, w + 2 * padding)
-                h = min(mask.shape[0] - y, h + 2 * padding)
-                
-                # Çizim mask'ını oluştur
-                region_mask = np.zeros_like(gray_mask)
-                cv2.drawContours(region_mask, [contour], -1, 255, -1)
-                
-                regions.append({
-                    'bbox': (x, y, w, h),
-                    'mask': region_mask,
-                    'contour': contour,
-                    'area': area,
-                    'center': (x + w//2, y + h//2)
-                })
-        
-        return regions
-        
+        return new_mask
     except Exception as e:
-        print(f"Çizim bölgesi tespit hatası: {e}")
-        return []
+        print(f"Maske hareket ettirme hatası: {str(e)}")
+        return mask
 
-def calculate_region_flow(flow, region):
-    """Belirli bir bölge için dominant flow hesapla"""
+def apply_mask_to_frame(frame, mask):
+    """Mask'ı frame'e uygula"""
     try:
-        x, y, w, h = region['bbox']
-        region_flow = flow[y:y+h, x:x+w]
+        # Mask'ın 3 kanallı olduğundan emin ol
+        if len(mask.shape) == 2:
+            mask = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+        elif mask.shape[2] == 4:  # RGBA
+            mask = cv2.cvtColor(mask, cv2.COLOR_RGBA2BGR)
         
-        # Mask kullanarak sadece çizim alanındaki flow'u al
-        mask = region['mask'][y:y+h, x:x+w] > 0
+        # Frame boyutuna uygun hale getir
+        if mask.shape[:2] != frame.shape[:2]:
+            mask = cv2.resize(mask, (frame.shape[1], frame.shape[0]))
         
-        if not np.any(mask):
-            return np.array([0.0, 0.0])
+        # Alpha blending
+        alpha = 0.7
         
-        # Maskelenmiş flow vektörleri
-        masked_flow_x = region_flow[mask, 0]
-        masked_flow_y = region_flow[mask, 1]
+        # Mask'ın siyah olmayan kısımlarını bul
+        mask_binary = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+        mask_binary = (mask_binary > 10).astype(np.uint8) * 255
         
-        # Median flow (outlier'lara karşı robust)
-        median_flow_x = np.median(masked_flow_x)
-        median_flow_y = np.median(masked_flow_y)
+        # 3 kanala çevir
+        mask_3ch = cv2.merge([mask_binary, mask_binary, mask_binary]) / 255.0
         
-        return np.array([median_flow_x, median_flow_y])
+        # Blending uygula
+        result = frame.astype(np.float32)
+        mask_colored = mask.astype(np.float32)
+        
+        result = result * (1 - mask_3ch * alpha) + mask_colored * mask_3ch * alpha
+        
+        return result.astype(np.uint8)
         
     except Exception as e:
-        print(f"Bölge flow hesaplama hatası: {e}")
-        return np.array([0.0, 0.0])
-
-def apply_flow_to_region(region, flow_vector, frame_size):
-    """Flow vektörünü kullanarak bölgeyi hareket ettir"""
-    try:
-        width, height = frame_size
-        x, y, w, h = region['bbox']
-        
-        # Yeni pozisyon
-        new_x = max(0, min(width - w, x + flow_vector[0]))
-        new_y = max(0, min(height - h, y + flow_vector[1]))
-        
-        # Yeni bbox
-        new_bbox = (int(new_x), int(new_y), w, h)
-        
-        # Yeni region oluştur
-        new_region = region.copy()
-        new_region['bbox'] = new_bbox
-        new_region['center'] = (int(new_x + w//2), int(new_y + h//2))
-        
-        return new_region
-        
-    except Exception as e:
-        print(f"Bölge hareket ettirme hatası: {e}")
-        return region
-
-def render_regions_to_frame(frame, regions, original_mask):
-    """Bölgeleri frame üzerine çiz"""
-    try:
-        result = frame.copy().astype(np.float32)
-        
-        for region in regions:
-            x, y, w, h = region['bbox']
-            
-            # Orijinal mask'tan bu bölgeyi al
-            region_original_mask = region['mask']
-            
-            # Yeni pozisyona yerleştir
-            if x + w <= frame.shape[1] and y + h <= frame.shape[0]:
-                # Alpha blending
-                alpha = 0.6
-                
-                # Mask'ı 3 kanala çevir
-                if len(original_mask.shape) == 3:
-                    mask_colored = cv2.resize(original_mask, (w, h))
-                else:
-                    mask_colored = cv2.resize(original_mask, (w, h))
-                    mask_colored = cv2.cvtColor(mask_colored, cv2.COLOR_GRAY2BGR)
-                
-                # Binary mask oluştur
-                region_resized = cv2.resize(region_original_mask, (w, h))
-                binary_mask = (region_resized > 10).astype(np.float32) / 255.0
-                binary_mask_3ch = np.stack([binary_mask] * 3, axis=2)
-                
-                # Blending uygula
-                frame_region = result[y:y+h, x:x+w]
-                mask_colored = mask_colored.astype(np.float32)
-                
-                blended = frame_region * (1 - binary_mask_3ch * alpha) + mask_colored * binary_mask_3ch * alpha
-                result[y:y+h, x:x+w] = blended
-        
-        return np.clip(result, 0, 255).astype(np.uint8)
-        
-    except Exception as e:
-        print(f"Region rendering hatası: {e}")
+        print(f"Mask uygulama hatası: {e}")
         return frame
 
-def process_video_with_optical_flow_tracking(video_path, mask_image):
-    """RAFT Optical Flow ile gelişmiş nesne takibi"""
+def apply_flow_to_mask_improved(mask, flow, max_flow_magnitude=30, smooth_factor=0.7):
+    """Düzeltilmiş gelişmiş mask hareket ettirme"""
     try:
-        print("🎯 RAFT Optical Flow takipli video işleme başlatılıyor...")
+        h, w = mask.shape[:2]
+        
+        # 1. Flow magnitude kontrolü
+        flow_magnitude = np.sqrt(flow[..., 0]**2 + flow[..., 1]**2)
+        valid_flow_mask = flow_magnitude < max_flow_magnitude
+        
+        # 2. Outlier'ları temizle
+        flow_filtered = flow.copy()
+        flow_filtered[~valid_flow_mask] = 0
+        
+        # 3. Flow'u smooth et - Scipy kontrolü
+        if SCIPY_AVAILABLE:
+            try:
+                flow_filtered[..., 0] = ndimage.gaussian_filter(flow_filtered[..., 0], sigma=1.0)
+                flow_filtered[..., 1] = ndimage.gaussian_filter(flow_filtered[..., 1], sigma=1.0)
+            except:
+                # Scipy hatası durumunda OpenCV kullan
+                flow_filtered[..., 0] = cv2.GaussianBlur(flow_filtered[..., 0], (5, 5), 1.0)
+                flow_filtered[..., 1] = cv2.GaussianBlur(flow_filtered[..., 1], (5, 5), 1.0)
+        else:
+            # Scipy yoksa OpenCV blur kullan
+            flow_filtered[..., 0] = cv2.GaussianBlur(flow_filtered[..., 0], (5, 5), 1.0)
+            flow_filtered[..., 1] = cv2.GaussianBlur(flow_filtered[..., 1], (5, 5), 1.0)
+        
+        # 4. Mask'ı grayscale'e çevir
+        if len(mask.shape) == 3:
+            mask_gray = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+        else:
+            mask_gray = mask
+        
+        # 5. Aktif bölgeleri bul
+        active_mask = mask_gray > 10
+        
+        if not np.any(active_mask):
+            return mask
+        
+        # 6. Aktif bölgedeki flow'u hesapla
+        active_indices = np.where(active_mask)
+        if len(active_indices[0]) == 0:
+            return mask
+        
+        active_flow_x = flow_filtered[active_indices[0], active_indices[1], 0]
+        active_flow_y = flow_filtered[active_indices[0], active_indices[1], 1]
+        
+        # 7. Median flow hesapla (robust)
+        median_flow_x = np.median(active_flow_x)
+        median_flow_y = np.median(active_flow_y)
+        
+        # 8. Flow'u sınırla ve yumuşat
+        median_flow_x = np.clip(median_flow_x, -max_flow_magnitude, max_flow_magnitude) * smooth_factor
+        median_flow_y = np.clip(median_flow_y, -max_flow_magnitude, max_flow_magnitude) * smooth_factor
+        
+        # 9. Koordinat gridleri
+        y_coords, x_coords = np.mgrid[0:h, 0:w].astype(np.float32)
+        
+        # 10. Yeni koordinatlar
+        new_x = x_coords + median_flow_x
+        new_y = y_coords + median_flow_y
+        
+        # 11. Sınırları kontrol et
+        new_x = np.clip(new_x, 0, w-1)
+        new_y = np.clip(new_y, 0, h-1)
+        
+        # 12. Mask'ı hareket ettir
+        new_mask = cv2.remap(mask, new_x, new_y, cv2.INTER_LINEAR)
+        
+        return new_mask
+        
+    except Exception as e:
+        print(f"Gelişmiş mask hareket ettirme hatası: {e}")
+        return mask
+def calculate_temporal_consistency_fixed(previous_masks, weight_decay=0.8):
+    """Düzeltilmiş temporal tutarlılık"""
+    try:
+        if len(previous_masks) == 0:
+            return None
+        
+        # İlk mask'ın boyutlarını referans al
+        reference_mask = previous_masks[-1]
+        
+        # Referans mask'ı grayscale'e çevir ve boyutları al
+        if len(reference_mask.shape) == 3:
+            reference_gray = cv2.cvtColor(reference_mask, cv2.COLOR_BGR2GRAY)
+            h, w = reference_gray.shape
+        else:
+            reference_gray = reference_mask
+            h, w = reference_mask.shape
+        
+        # Birleştirme için grayscale array oluştur
+        combined_mask = np.zeros((h, w), dtype=np.float32)
+        total_weight = 0
+        
+        # Son 5 mask'ı işle
+        for i, mask in enumerate(reversed(previous_masks[-5:])):
+            weight = weight_decay ** i
+            
+            # Mask'ı grayscale'e çevir
+            if len(mask.shape) == 3:
+                mask_gray = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+            else:
+                mask_gray = mask.copy()
+            
+            # Boyut uyumluluğunu kontrol et ve düzelt
+            if mask_gray.shape != (h, w):
+                mask_gray = cv2.resize(mask_gray, (w, h))
+            
+            # Ağırlıklı toplama
+            combined_mask += mask_gray.astype(np.float32) * weight
+            total_weight += weight
+        
+        # Normaliz et
+        if total_weight > 0:
+            combined_mask /= total_weight
+        
+        # Threshold uygula ve uint8'e çevir
+        combined_mask = (combined_mask > 50).astype(np.uint8) * 255
+        
+        return combined_mask
+        
+    except Exception as e:
+        print(f"Temporal consistency hatası: {e}")
+        return None
+
+def process_video_with_improved_tracking(video_path, mask_image):
+    """Düzeltilmiş gelişmiş optical flow takibi"""
+    try:
+        print("🎯 Düzeltilmiş RAFT Optical Flow takibi başlatılıyor...")
         
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -311,46 +373,53 @@ def process_video_with_optical_flow_tracking(video_path, mask_image):
         
         print(f"📹 Video: {width}x{height}, {fps}fps, {total_frames} frame")
         
-        # Çıktı dosyası - kaliteyi korumak için
+        # Çıktı dosyası
         timestamp = str(int(time.time()))
-        output_path = os.path.join('static/results', f'flow_tracked_{timestamp}.mp4')
+        output_path = os.path.join('static/results', f'fixed_tracking_{timestamp}.mp4')
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
-        # Yüksek kalite codec
+        # Video writer
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
         
         if not out.isOpened():
             raise Exception("Video writer açılamadı")
         
+        # Mask'ı hazırla - boyut standartlaştırması
+        print(f"🎨 Orijinal mask shape: {mask_image.shape}")
+        
+        if len(mask_image.shape) == 3 and mask_image.shape[2] == 4:  # RGBA
+            mask_resized = cv2.resize(mask_image, (width, height))
+            mask_resized = cv2.cvtColor(mask_resized, cv2.COLOR_RGBA2BGR)
+        elif len(mask_image.shape) == 3:  # RGB/BGR
+            mask_resized = cv2.resize(mask_image, (width, height))
+        else:  # Grayscale
+            mask_resized = cv2.resize(mask_image, (width, height))
+            mask_resized = cv2.cvtColor(mask_resized, cv2.COLOR_GRAY2BGR)
+        
+        print(f"🎨 Yeniden boyutlandırılmış mask: {mask_resized.shape}")
+        
         # İlk frame'i oku
-        ret, first_frame = cap.read()
+        ret, prev_frame = cap.read()
         if not ret:
             raise Exception("İlk frame okunamadı")
         
-        # Mask'ı video boyutuna ölçekle
-        mask_resized = cv2.resize(mask_image, (width, height))
-        
-        # Çizim bölgelerini tespit et
-        regions = extract_drawing_regions(mask_resized)
-        if not regions:
-            print("❌ Çizim bölgesi bulunamadı, basit çizim uygulanacak")
-            return apply_simple_overlay(video_path, mask_resized, output_path)
-        
-        print(f"✅ {len(regions)} çizim bölgesi tespit edildi")
-        
-        # İlk frame'e çizimi uygula
-        first_frame_result = render_regions_to_frame(first_frame, regions, mask_resized)
-        out.write(first_frame_result)
-        
-        # RAFT için device
+        # Değişkenler
+        current_mask = mask_resized.copy()
+        mask_history = []
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        # Önceki frame
-        prev_frame = first_frame.copy()
-        current_regions = regions.copy()
+        # İlk frame'i işle
+        first_frame_result = apply_mask_to_frame(prev_frame, current_mask)
+        out.write(first_frame_result)
+        mask_history.append(current_mask.copy())
         
         frame_count = 1
+        
+        # RAFT modeli kontrolü
+        if raft_model is None:
+            print("⚠️ RAFT modeli yok, basit işleme uygulanıyor...")
+            return process_video_simple_drawing(cap, out, mask_resized, total_frames, output_path)
         
         while True:
             ret, current_frame = cap.read()
@@ -365,32 +434,68 @@ def process_video_with_optical_flow_tracking(video_path, mask_image):
             
             try:
                 # RAFT ile optical flow hesapla
-                if raft_model is not None:
-                    prev_tensor = frame_to_tensor(prev_frame, device)
-                    curr_tensor = frame_to_tensor(current_frame, device)
-                    
-                    if prev_tensor is not None and curr_tensor is not None:
-                        with torch.no_grad():
-                            _, flow_tensor = raft_model(prev_tensor, curr_tensor, iters=12, test_mode=True)
-                        
-                        flow = tensor_to_flow(flow_tensor)
-                        
-                        if flow is not None:
-                            # Her bölge için flow hesapla ve güncelle
-                            updated_regions = []
-                            for region in current_regions:
-                                region_flow = calculate_region_flow(flow, region)
-                                updated_region = apply_flow_to_region(region, region_flow, (width, height))
-                                updated_regions.append(updated_region)
-                            
-                            current_regions = updated_regions
-                        else:
-                                                    print(f"⚠️ Frame {frame_count}: Tensor çevrimi başarısız")
-                else:
-                    print(f"⚠️ Frame {frame_count}: RAFT modeli yok")
+                prev_tensor = frame_to_tensor(prev_frame, device)
+                curr_tensor = frame_to_tensor(current_frame, device)
                 
-                # Güncellenmiş bölgelerle frame'i render et
-                frame_result = render_regions_to_frame(current_frame, current_regions, mask_resized)
+                if prev_tensor is not None and curr_tensor is not None:
+                    with torch.no_grad():
+                        _, flow_tensor = raft_model(prev_tensor, curr_tensor, iters=12, test_mode=True)
+                    
+                    flow = tensor_to_flow(flow_tensor)
+                    
+                    if flow is not None:
+                        # Flow'u mask boyutuna ölçekle
+                        if flow.shape[:2] != current_mask.shape[:2]:
+                            flow_resized = cv2.resize(flow, (current_mask.shape[1], current_mask.shape[0]))
+                        else:
+                            flow_resized = flow
+                        
+                        # Düzeltilmiş mask hareket ettirme
+                        current_mask = apply_flow_to_mask_improved(
+                            current_mask, 
+                            flow_resized, 
+                            max_flow_magnitude=25,  # Daha konservatif
+                            smooth_factor=0.8       # Daha smooth
+                        )
+                        
+                        # Temporal tutarlılık (düzeltilmiş)
+                        if len(mask_history) > 2:
+                            temporal_mask = calculate_temporal_consistency_fixed(mask_history[-3:])
+                            if temporal_mask is not None:
+                                # Mevcut mask'ı grayscale'e çevir
+                                if len(current_mask.shape) == 3:
+                                    current_mask_gray = cv2.cvtColor(current_mask, cv2.COLOR_BGR2GRAY)
+                                else:
+                                    current_mask_gray = current_mask.copy()
+                                
+                                # Boyut kontrolü
+                                if temporal_mask.shape != current_mask_gray.shape:
+                                    temporal_mask = cv2.resize(temporal_mask, 
+                                                             (current_mask_gray.shape[1], current_mask_gray.shape[0]))
+                                
+                                # Ağırlıklı birleştirme
+                                alpha = 0.6
+                                combined = (current_mask_gray.astype(np.float32) * alpha + 
+                                          temporal_mask.astype(np.float32) * (1-alpha)).astype(np.uint8)
+                                
+                                # Geri BGR'e çevir
+                                if len(current_mask.shape) == 3:
+                                    current_mask = cv2.cvtColor(combined, cv2.COLOR_GRAY2BGR)
+                                else:
+                                    current_mask = combined
+                        
+                        # Mask geçmişini güncelle
+                        mask_history.append(current_mask.copy())
+                        if len(mask_history) > 5:  # Sadece son 5 mask
+                            mask_history.pop(0)
+                    
+                    else:
+                        print(f"⚠️ Frame {frame_count}: Flow hesaplanamadı")
+                else:
+                    print(f"⚠️ Frame {frame_count}: Tensor çevrimi başarısız")
+                
+                # Frame'i işle
+                frame_result = apply_mask_to_frame(current_frame, current_mask)
                 out.write(frame_result)
                 
                 # Bir sonraki iterasyon için
@@ -398,35 +503,27 @@ def process_video_with_optical_flow_tracking(video_path, mask_image):
                 
             except Exception as frame_error:
                 print(f"❌ Frame {frame_count} hatası: {frame_error}")
-                # Hata durumunda önceki pozisyonları kullan
-                frame_result = render_regions_to_frame(current_frame, current_regions, mask_resized)
+                # Hata durumunda önceki mask'ı kullan
+                frame_result = apply_mask_to_frame(current_frame, current_mask)
                 out.write(frame_result)
         
         cap.release()
         out.release()
         
-        print(f"✅ Optical flow takipli video tamamlandı: {output_path}")
+        print(f"✅ Düzeltilmiş takip tamamlandı: {output_path}")
         return output_path
         
     except Exception as e:
-        print(f"❌ Optical flow takip hatası: {str(e)}")
+        print(f"❌ Düzeltilmiş takip hatası: {str(e)}")
         print("Detay:", traceback.format_exc())
         return None
 
-def apply_simple_overlay(video_path, mask, output_path):
-    """Basit overlay (fallback)"""
+def process_video_simple_drawing(cap, out, mask, total_frames, output_path):
+    """RAFT olmadan basit çizim uygulama"""
     try:
-        print("🔄 Basit overlay uygulanıyor...")
+        print("Basit çizim uygulanıyor...")
         
-        cap = cv2.VideoCapture(video_path)
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-        
-        frame_count = 0
+        frame_count = 1
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -434,32 +531,24 @@ def apply_simple_overlay(video_path, mask, output_path):
                 
             frame_count += 1
             
-            # Basit alpha blending
-            if len(mask.shape) == 3:
-                mask_colored = mask
-            else:
-                mask_colored = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+            if frame_count % 50 == 0:
+                print(f"Basit frame işleniyor: {frame_count}/{total_frames}")
             
-            mask_binary = cv2.cvtColor(mask_colored, cv2.COLOR_BGR2GRAY)
-            mask_binary = (mask_binary > 10).astype(np.float32) / 255.0
-            mask_3ch = np.stack([mask_binary] * 3, axis=2)
-            
-            alpha = 0.6
-            result = frame.astype(np.float32)
-            mask_colored = mask_colored.astype(np.float32)
-            
-            result = result * (1 - mask_3ch * alpha) + mask_colored * mask_3ch * alpha
-            
-            out.write(np.clip(result, 0, 255).astype(np.uint8))
+            frame_with_drawing = apply_mask_to_frame(frame, mask)
+            out.write(frame_with_drawing)
         
         cap.release()
         out.release()
         
-        print(f"✅ Basit overlay tamamlandı: {output_path}")
+        print(f"Basit video işleme tamamlandı: {output_path}")
         return output_path
         
     except Exception as e:
-        print(f"❌ Basit overlay hatası: {e}")
+        print(f"Basit çizim hatası: {e}")
+        if cap:
+            cap.release()
+        if out:
+            out.release()
         return None
 
 # Flask Routes
@@ -704,8 +793,7 @@ def draw_process_video():
             return jsonify({'success': False, 'error': f'Mask işleme hatası: {str(mask_error)}'})
         
         # Gelişmiş optical flow takipli video işle
-        result_path = process_video_with_optical_flow_tracking(temp_video_path, mask_array)
-        
+        result_path = process_video_with_improved_tracking(temp_video_path, mask_array)
         # Geçici dosyayı temizle
         try:
             os.remove(temp_video_path)
